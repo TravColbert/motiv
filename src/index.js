@@ -44,11 +44,11 @@ Commands:
   project add --name <n> --repo <r> Register a project
          [--autonomy <level>]
   project list                      List registered projects
-  submit --project <p> "desc"       Submit a request (inline description)
+  submit --project <p> \"desc\"       Submit a request (inline description)
   submit --project <p> --file <f>   Submit a request (description from file)
   submit --project <p>              Submit a request (opens $EDITOR, or reads piped stdin)
          [--autonomy <level>]       Override project autonomy for this request
-  amend <id> "desc"                 Add follow-up changes to a succeeded/applied request
+  amend <id> \"desc\"                 Add follow-up changes to a succeeded/applied request
   amend <id> --file <f>             Add follow-up changes (description from file)
   amend <id>                        Add follow-up changes (opens $EDITOR, or reads piped stdin)
        [--autonomy <level>]         Override autonomy for this amend
@@ -139,7 +139,7 @@ async function cmdProjectAdd(subArgs) {
 
   const existing = await readProject(name);
   if (existing) {
-    console.error(`Project "${name}" already exists.`);
+    console.error(`Project \"${name}\" already exists.`);
     process.exit(1);
   }
 
@@ -152,7 +152,7 @@ async function cmdProjectAdd(subArgs) {
 
   await writeProject(name, project);
   await commitLedger(`Register project: ${name}`);
-  console.log(`Project "${name}" registered.`);
+  console.log(`Project \"${name}\" registered.`);
   console.log(`  Repo: ${repo}`);
   console.log(`  Branch: ${defaultBranch}`);
   console.log(`  Autonomy: ${autonomy}`);
@@ -181,7 +181,7 @@ async function cmdSubmit(subArgs) {
 
   if (!projectName) {
     console.error(
-      `Usage: ${APP_NAME_LOWER} submit --project <name> [--autonomy <level>] [--file <path>] ["description"]`
+      `Usage: ${APP_NAME_LOWER} submit --project <name> [--autonomy <level>] [--file <path>] [\"description\"]`
     );
     process.exit(1);
   }
@@ -190,7 +190,7 @@ async function cmdSubmit(subArgs) {
 
   const project = await readProject(projectName);
   if (!project) {
-    console.error(`Project "${projectName}" not found. Register it first with: ${APP_NAME_LOWER} project add`);
+    console.error(`Project \"${projectName}\" not found. Register it first with: ${APP_NAME_LOWER} project add`);
     process.exit(1);
   }
 
@@ -204,14 +204,14 @@ async function cmdSubmit(subArgs) {
 
   await loadEnv();
 
-  console.log(`Creating request for "${projectName}"...`);
+  console.log(`Creating request for \"${projectName}\"...`);
   const request = await createRequest(projectName, description);
   console.log(`  Request:  ${request.id}`);
   console.log(`  Branch:   ${request.branch}`);
   console.log(`  Autonomy: ${autonomy}`);
 
   if (autonomy === "ingest_only") {
-    console.log(`\nAutonomy is "ingest_only" — request ingested, execution skipped.`);
+    console.log(`\nAutonomy is \"ingest_only\" — request ingested, execution skipped.`);
     return;
   }
 
@@ -235,14 +235,14 @@ async function cmdRetry(subArgs) {
   }
 
   if (!canRetry(request, { force })) {
-    console.error(`Request ${id} is in status "${request.status}" and cannot be retried.`);
+    console.error(`Request ${id} is in status \"${request.status}\" and cannot be retried.`);
     if (!force) console.error(`Use --force to rebuild from scratch regardless of status.`);
     process.exit(1);
   }
 
   const project = await readProject(request.project);
   if (!project) {
-    console.error(`Project "${request.project}" not found.`);
+    console.error(`Project \"${request.project}\" not found.`);
     process.exit(1);
   }
 
@@ -260,7 +260,7 @@ async function cmdRetry(subArgs) {
   request.status = "ingested";
 
   if (autonomy === "ingest_only") {
-    console.log(`Autonomy is "ingest_only" — execution skipped.`);
+    console.log(`Autonomy is \"ingest_only\" — execution skipped.`);
     return;
   }
 
@@ -273,7 +273,7 @@ async function cmdAmend(subArgs) {
 
   if (!id) {
     console.error(
-      `Usage: ${APP_NAME_LOWER} amend <request-id> [--autonomy <level>] [--file <path>] ["description"]`
+      `Usage: ${APP_NAME_LOWER} amend <request-id> [--autonomy <level>] [--file <path>] [\"description\"]`
     );
     process.exit(1);
   }
@@ -286,7 +286,7 @@ async function cmdAmend(subArgs) {
 
   if (!canAmend(request)) {
     console.error(
-      `Request ${id} is in status "${request.status}" and cannot be amended. Only succeeded or applied requests can be amended.`
+      `Request ${id} is in status \"${request.status}\" and cannot be amended. Only succeeded or applied requests can be amended.`
     );
     process.exit(1);
   }
@@ -295,7 +295,7 @@ async function cmdAmend(subArgs) {
 
   const project = await readProject(request.project);
   if (!project) {
-    console.error(`Project "${request.project}" not found.`);
+    console.error(`Project \"${request.project}\" not found.`);
     process.exit(1);
   }
 
@@ -316,7 +316,7 @@ async function cmdAmend(subArgs) {
   console.log(`  Autonomy: ${autonomy}`);
 
   if (autonomy === "ingest_only") {
-    console.log(`\nAutonomy is "ingest_only" — amendment ingested, execution skipped.`);
+    console.log(`\nAutonomy is \"ingest_only\" — amendment ingested, execution skipped.`);
     return;
   }
 
@@ -326,7 +326,7 @@ async function cmdAmend(subArgs) {
 async function cmdStatus() {
   const requests = await listRequests();
   if (requests.length === 0) {
-    console.log(`No requests. Submit one with: ${APP_NAME_LOWER} submit --project <name> "description"`);
+    console.log(`No requests. Submit one with: ${APP_NAME_LOWER} submit --project <name> \"description\"`);
     return;
   }
 
@@ -344,9 +344,9 @@ async function cmdStatus() {
 
   console.log(`${APP_NAME} Status\n`);
   console.log(
-    `  ${"ID".padEnd(10)} ${"Status".padEnd(16)} ${"Project".padEnd(16)} Description`
+    `  ${\"ID\".padEnd(10)} ${\"Status\".padEnd(16)} ${\"Project\".padEnd(16)} Description`
   );
-  console.log(`  ${"─".repeat(10)} ${"─".repeat(16)} ${"─".repeat(16)} ${"─".repeat(30)}`);
+  console.log(`  ${\"─\".repeat(10)} ${\"─".repeat(16)} ${\"─".repeat(16)} ${\"─".repeat(30)}`);
 
   for (const r of requests) {
     const statusDisplay = formatStatus(r.status);
@@ -596,7 +596,7 @@ ${summary}
 - **Description**: ${request.description}
 
 ---
-*This PR was created automatically by [${APP_NAME}](https://github.com/${APP_NAME_LOWER}).*
+*This PR was created automatically by [${APP_NAME}](https://github.com/TravColbert/motiv).*
 `;
 }
 
