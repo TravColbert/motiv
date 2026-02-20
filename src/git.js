@@ -189,9 +189,23 @@ export async function commitAll(projectName, message) {
 /**
  * Push a branch to origin.
  */
-export async function pushBranch(projectName, branch) {
+export async function pushBranch(projectName, branch, { force = false } = {}) {
   const cwd = workspacePath(projectName);
-  await git(cwd, ["push", "-u", "origin", branch]);
+  const args = ["push", "-u", "origin", branch];
+  if (force) args.splice(1, 0, "--force-with-lease");
+  await git(cwd, args);
+}
+
+/**
+ * Delete a local branch. No-op if the branch doesn't exist.
+ */
+export async function deleteBranch(projectName, branch) {
+  const cwd = workspacePath(projectName);
+  try {
+    await git(cwd, ["branch", "-D", branch]);
+  } catch {
+    // Branch may not exist locally — that's fine
+  }
 }
 
 /**
@@ -223,6 +237,21 @@ export async function ensureWorkspace(project) {
     await fetchRepo(project.name);
   }
   await resetToDefault(project.name, project.default_branch || "main");
+}
+
+/**
+ * Ensure a workspace is ready for an amend: fetch latest, checkout existing branch.
+ * Unlike ensureWorkspace, this does NOT reset to the default branch.
+ */
+export async function ensureWorkspaceForAmend(project, branch) {
+  const exists = await workspaceExists(project.name);
+  if (!exists) {
+    throw new Error(
+      `Workspace for "${project.name}" not found. Cannot amend without an existing workspace.`
+    );
+  }
+  await fetchRepo(project.name);
+  await checkoutBranch(project.name, branch);
 }
 
 /**

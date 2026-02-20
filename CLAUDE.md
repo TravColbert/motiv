@@ -44,6 +44,8 @@ bun build --compile src/index.js --outfile motiv  # Compile to standalone binary
 
 **Request lifecycle**: Requests track versioned specs, multiple execution attempts (max 2 retries), and branch/commit references. After 2 failures, requests escalate to `needs_human`.
 
+**Amend flow**: After a request succeeds or is applied (PR opened), `motiv amend <id> "description"` appends a new spec version to the same request, reuses the existing branch, and gives the agent context about prior work. Pushing to the same branch auto-updates the existing PR — no new PR is created.
+
 ## Conventions
 
 - ES modules (`"type": "module"`) with Bun runtime

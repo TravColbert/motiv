@@ -455,8 +455,34 @@ export async function runAgent(project, request) {
   // Messages in the provider's native format
   const messages = [];
 
-  // Initial user message
-  const userText = `Please implement the following change:\n\n${request.spec[request.spec.length - 1].description}\n\nStart by exploring the project structure to understand the codebase.`;
+  // Initial user message — include prior work context for amends
+  const currentSpec = request.spec[request.spec.length - 1];
+  let userText;
+
+  if (request.spec.length > 1) {
+    const priorSpecs = request.spec.slice(0, -1);
+    const priorSummaries = request.attempts
+      .filter((a) => a.status === "succeeded" && a.summary)
+      .map((a) => a.summary);
+
+    let context = "## Prior work on this branch\n\n";
+    context += "Previous specs implemented:\n";
+    for (const spec of priorSpecs) {
+      context += `- v${spec.version}: ${spec.description}\n`;
+    }
+    if (priorSummaries.length > 0) {
+      context += "\nWhat was done:\n";
+      for (const summary of priorSummaries) {
+        context += `- ${summary}\n`;
+      }
+    }
+    context += "\nThose changes are already committed on this branch. Do NOT redo or revert them.\n";
+
+    userText = `${context}\n## New amendment (v${currentSpec.version})\n\nPlease implement the following additional change:\n\n${currentSpec.description}\n\nStart by reviewing the existing changes (use view_diff or read relevant files) to understand what has already been done, then implement the new change.`;
+  } else {
+    userText = `Please implement the following change:\n\n${currentSpec.description}\n\nStart by exploring the project structure to understand the codebase.`;
+  }
+
   messages.push(provider.formatUserMessage(userText));
 
   let turns = 0;

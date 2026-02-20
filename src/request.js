@@ -11,11 +11,11 @@ import { APP_NAME_LOWER } from "./config.js";
 const VALID_TRANSITIONS = {
   ingested: ["executing"],
   executing: ["succeeded", "failed"],
-  succeeded: ["applied"],
+  succeeded: ["applied", "executing"],
   failed: ["retrying", "needs_human"],
   retrying: ["executing"],
   needs_human: ["executing"], // manual retry
-  applied: [],
+  applied: ["executing"],
 };
 
 const MAX_RETRIES = 2;
@@ -177,9 +177,59 @@ export async function markApplied(id, prUrl) {
 }
 
 /**
- * Check if a request can be retried.
+ * Amend a succeeded/applied request with a new spec version.
+ * Reuses the same branch so subsequent pushes update the existing PR.
  */
-export function canRetry(request) {
+export async function amendRequest(id, description) {
+  const request = await readRequest(id);
+  if (!request) throw new Error(`Request ${id} not found`);
+
+  if (!canAmend(request)) {
+    throw new Error(
+      `Request ${id} is in status "${request.status}" and cannot be amended. Only succeeded or applied requests can be amended.`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const nextVersion = request.spec.length + 1;
+
+  request.spec.push({
+    version: nextVersion,
+    timestamp: now,
+    description,
+  });
+
+  const previousStatus = request.status;
+  request.status = "executing";
+  request.updated_at = now;
+
+  await writeRequest(id, request);
+  const brief = truncate(description, 72);
+  await writeRequestLog(id, {
+    timestamp: now,
+    event: "amended",
+    from: previousStatus,
+    to: "executing",
+    message: `Amended with spec v${nextVersion}: ${brief}`,
+  });
+  await commitLedger(`Amend ${id} (v${nextVersion}): ${brief}`);
+
+  return request;
+}
+
+/**
+ * Check if a request can be amended (add follow-up work on the same branch).
+ */
+export function canAmend(request) {
+  return request.status === "succeeded" || request.status === "applied";
+}
+
+/**
+ * Check if a request can be retried.
+ * With { force: true }, any non-executing status is retryable.
+ */
+export function canRetry(request, { force = false } = {}) {
+  if (force) return request.status !== "executing";
   return (
     request.status === "failed" ||
     request.status === "needs_human"

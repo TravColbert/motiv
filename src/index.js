@@ -14,13 +14,15 @@ import {
 } from "./ledger.js";
 import {
   ensureWorkspace,
+  ensureWorkspaceForAmend,
   checkoutBranch,
   commitAll,
   pushBranch,
+  deleteBranch,
   getCurrentCommit,
   runInWorkspace,
 } from "./git.js";
-import { createRequest, recordAttempt, markApplied, canRetry } from "./request.js";
+import { createRequest, amendRequest, recordAttempt, markApplied, canRetry, canAmend } from "./request.js";
 import { runAgent } from "./agent.js";
 import { createPR, enableAutoMerge } from "./github.js";
 import { readJsonFile } from "./config.js";
@@ -46,11 +48,16 @@ Commands:
   submit --project <p> --file <f>   Submit a request (description from file)
   submit --project <p>              Submit a request (opens $EDITOR, or reads piped stdin)
          [--autonomy <level>]       Override project autonomy for this request
+  amend <id> "desc"                 Add follow-up changes to a succeeded/applied request
+  amend <id> --file <f>             Add follow-up changes (description from file)
+  amend <id>                        Add follow-up changes (opens $EDITOR, or reads piped stdin)
+       [--autonomy <level>]         Override autonomy for this amend
   status                            Dashboard of all requests
   list                              List all requests
   show <id>                         Show request details
   logs <id>                         Show request execution logs
   retry <id> [--autonomy <level>]   Re-attempt a failed request
+         [--force]                 Rebuild from scratch, even if succeeded/applied
 
 Autonomy Levels:
   ingest_only    Create request in ledger but do not execute
@@ -214,8 +221,10 @@ async function cmdSubmit(subArgs) {
 async function cmdRetry(subArgs) {
   const { flags, positional } = parseFlags(subArgs);
   const id = positional[0] || flags._?.[0];
+  const force = flags.force === true;
+
   if (!id) {
-    console.error(`Usage: ${APP_NAME_LOWER} retry <request-id> [--autonomy <level>]`);
+    console.error(`Usage: ${APP_NAME_LOWER} retry <request-id> [--autonomy <level>] [--force]`);
     process.exit(1);
   }
 
@@ -225,8 +234,9 @@ async function cmdRetry(subArgs) {
     process.exit(1);
   }
 
-  if (!canRetry(request)) {
+  if (!canRetry(request, { force })) {
     console.error(`Request ${id} is in status "${request.status}" and cannot be retried.`);
+    if (!force) console.error(`Use --force to rebuild from scratch regardless of status.`);
     process.exit(1);
   }
 
@@ -246,7 +256,7 @@ async function cmdRetry(subArgs) {
 
   await loadEnv();
 
-  console.log(`Retrying ${id} (autonomy: ${autonomy})...`);
+  console.log(`${force ? "Force retrying" : "Retrying"} ${id} (autonomy: ${autonomy})...`);
   request.status = "ingested";
 
   if (autonomy === "ingest_only") {
@@ -254,7 +264,63 @@ async function cmdRetry(subArgs) {
     return;
   }
 
-  await executeRequest(project, request, autonomy);
+  await executeRequest(project, request, autonomy, { force });
+}
+
+async function cmdAmend(subArgs) {
+  const { flags, positional } = parseFlags(subArgs);
+  const id = positional[0];
+
+  if (!id) {
+    console.error(
+      `Usage: ${APP_NAME_LOWER} amend <request-id> [--autonomy <level>] [--file <path>] ["description"]`
+    );
+    process.exit(1);
+  }
+
+  const request = await readRequest(id);
+  if (!request) {
+    console.error(`Request ${id} not found.`);
+    process.exit(1);
+  }
+
+  if (!canAmend(request)) {
+    console.error(
+      `Request ${id} is in status "${request.status}" and cannot be amended. Only succeeded or applied requests can be amended.`
+    );
+    process.exit(1);
+  }
+
+  const description = await resolveDescription(flags, positional.slice(1));
+
+  const project = await readProject(request.project);
+  if (!project) {
+    console.error(`Project "${request.project}" not found.`);
+    process.exit(1);
+  }
+
+  const autonomy = flags.autonomy || project.autonomy || DEFAULT_AUTONOMY;
+  try {
+    validateAutonomy(autonomy);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+
+  await loadEnv();
+
+  const specVersion = request.spec.length + 1;
+  console.log(`Amending ${id} (spec v${specVersion})...`);
+  const amended = await amendRequest(id, description);
+  console.log(`  Branch:   ${amended.branch}`);
+  console.log(`  Autonomy: ${autonomy}`);
+
+  if (autonomy === "ingest_only") {
+    console.log(`\nAutonomy is "ingest_only" — amendment ingested, execution skipped.`);
+    return;
+  }
+
+  await executeRequest(project, amended, autonomy);
 }
 
 async function cmdStatus() {
@@ -336,9 +402,11 @@ async function cmdShow(subArgs) {
     console.log(`PR:      ${request.pr_url}`);
   }
 
-  console.log(`\nSpec versions:`);
+  console.log(`\nSpec versions: (${request.spec.length})`);
   for (const spec of request.spec) {
-    console.log(`  v${spec.version} (${spec.timestamp}): ${spec.description}`);
+    const label = spec.version === 1 ? "initial" : "amend";
+    console.log(`  v${spec.version} [${label}] (${spec.timestamp}):`);
+    console.log(`    ${spec.description}`);
   }
 
   if (request.attempts.length > 0) {
@@ -379,19 +447,27 @@ async function cmdLogs(subArgs) {
 
 // --- Core Execution Flow ---
 
-async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY) {
-  console.log(`\nExecuting ${request.id}...`);
+async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY, { force = false } = {}) {
+  const isAmend = request.spec.length > 1;
+  console.log(`\nExecuting ${request.id}${isAmend ? ` (amend v${request.spec.length})` : ""}${force ? " (force rebuild)" : ""}...`);
 
   try {
     // 1. Prepare workspace
-    console.log("Preparing workspace...");
-    await ensureWorkspace(project);
+    if (isAmend && !force) {
+      console.log(`Checking out existing branch ${request.branch}...`);
+      await ensureWorkspaceForAmend(project, request.branch);
+    } else {
+      console.log("Preparing workspace...");
+      await ensureWorkspace(project);
+      if (force) {
+        console.log(`Deleting old branch ${request.branch}...`);
+        await deleteBranch(project.name, request.branch);
+      }
+      console.log(`Creating branch ${request.branch}...`);
+      await checkoutBranch(project.name, request.branch, true);
+    }
 
-    // 2. Create branch
-    console.log(`Creating branch ${request.branch}...`);
-    await checkoutBranch(project.name, request.branch, true);
-
-    // 3. Run agent
+    // 2. Run agent
     console.log("Running agent...");
     const result = await runAgent(project, request);
 
@@ -410,7 +486,7 @@ async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY) {
 
     const briefTitle = result.title || truncate(request.description, 72);
 
-    // 4. Commit changes
+    // 3. Commit changes
     console.log("Committing changes...");
     const committed = await commitAll(
       project.name,
@@ -427,7 +503,7 @@ async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY) {
 
     const commitHash = await getCurrentCommit(project.name);
 
-    // 5. Run local tests if configured
+    // 4. Run local tests if configured
     const manifest = await readJsonFile(
       join(workspacePath(project.name), `.${APP_NAME_LOWER}.json`)
     );
@@ -452,7 +528,7 @@ async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY) {
       console.log("Tests passed.");
     }
 
-    // 6. Record successful attempt
+    // 5. Record successful attempt
     await recordAttempt(request.id, {
       status: "succeeded",
       commit: commitHash,
@@ -467,30 +543,34 @@ async function executeRequest(project, request, autonomy = DEFAULT_AUTONOMY) {
       return;
     }
 
-    // 7. Push branch
-    console.log(`Pushing branch ${request.branch}...`);
-    await pushBranch(project.name, request.branch);
+    // 6. Push branch
+    console.log(`${force ? "Force pushing" : "Pushing"} branch ${request.branch}...`);
+    await pushBranch(project.name, request.branch, { force });
 
-    // 8. Create PR (draft for draft_pr, regular for full)
-    const isDraft = autonomy !== "full";
-    console.log(`Creating ${isDraft ? "draft " : ""}PR...`);
-    const pr = await createPR({
-      repoUrl: project.repo,
-      branch: request.branch,
-      baseBranch: project.default_branch || "main",
-      title: `${request.id}: ${briefTitle}`,
-      body: buildPRBody(request, result.summary),
-      draft: isDraft,
-    });
+    // 7. PR handling — skip creation for amends (push auto-updates the existing PR)
+    if (isAmend && request.pr_url) {
+      await markApplied(request.id, request.pr_url);
+      console.log(`\nDone! Pushed to existing PR: ${request.pr_url}`);
+    } else {
+      const isDraft = autonomy !== "full";
+      console.log(`Creating ${isDraft ? "draft " : ""}PR...`);
+      const pr = await createPR({
+        repoUrl: project.repo,
+        branch: request.branch,
+        baseBranch: project.default_branch || "main",
+        title: `${request.id}: ${briefTitle}`,
+        body: buildPRBody(request, result.summary),
+        draft: isDraft,
+      });
 
-    // full: attempt to enable auto-merge
-    if (autonomy === "full") {
-      console.log("Enabling auto-merge...");
-      await enableAutoMerge(project.repo, pr.number);
+      if (autonomy === "full") {
+        console.log("Enabling auto-merge...");
+        await enableAutoMerge(project.repo, pr.number);
+      }
+
+      await markApplied(request.id, pr.html_url);
+      console.log(`\nDone! ${isDraft ? "Draft PR" : "PR"}: ${pr.html_url}`);
     }
-
-    await markApplied(request.id, pr.html_url);
-    console.log(`\nDone! ${isDraft ? "Draft PR" : "PR"}: ${pr.html_url}`);
   } catch (error) {
     console.error(`\nExecution error: ${error.message}`);
     try {
@@ -597,6 +677,10 @@ async function main() {
 
     case "retry":
       await cmdRetry(subArgs);
+      break;
+
+    case "amend":
+      await cmdAmend(subArgs);
       break;
 
     default:
