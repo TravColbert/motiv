@@ -596,7 +596,7 @@ ${summary}
 - **Description**: ${request.description}
 
 ---
-*This PR was created automatically by [${APP_NAME}](https://github.com/${APP_NAME_LOWER}).*
+*This PR was created automatically by [${APP_NAME}](https://github.com/TravColbert/motiv).*
 `;
 }
 
