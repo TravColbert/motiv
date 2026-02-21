@@ -1,3 +1,5 @@
+import { fetchWithRetry } from "./retry.js";
+
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-20250514";
 const MAX_TOKENS = 16384;
@@ -86,7 +88,7 @@ export function parseResponse(apiResponse) {
  * Make the API call to Claude.
  */
 export async function call(apiKey, formattedRequest) {
-  const response = await fetch(API_URL, {
+  const response = await fetchWithRetry(API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

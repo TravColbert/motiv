@@ -1,3 +1,5 @@
+import { fetchWithRetry } from "./retry.js";
+
 const API_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = "gemini-2.5-pro";
 const MAX_TOKENS = 16384;
@@ -161,7 +163,7 @@ export function parseResponse(apiResponse) {
 export async function call(apiKey, formattedRequest) {
   const url = `${API_URL}/${MODEL}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
