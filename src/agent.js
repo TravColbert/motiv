@@ -511,6 +511,12 @@ export async function runAgent(project, request) {
       console.log(`    Tokens — in: ${parsed.usage.input_tokens}, out: ${parsed.usage.output_tokens}`);
     }
 
+    if (parsed.text) {
+      for (const line of parsed.text.split('\n')) {
+        console.log(`    ${line}`);
+      }
+    }
+
     // Append the assistant's raw response to the conversation
     messages.push(provider.formatAssistantMessage(parsed.raw));
 
