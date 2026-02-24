@@ -602,10 +602,36 @@ export async function runAgent(project, request) {
   return agentLoop(project, systemPrompt, userText, TOOLS);
 }
 
-// Read-only tools for the context agent
-const CONTEXT_TOOLS = TOOLS.filter((t) =>
-  ["read_file", "list_directory", "search_files", "find_files", "get_file_info", "execute_command", "done"].includes(t.name)
-);
+// Tools for the context agent: read-only exploration + a done tool that
+// expects the full markdown document (not a short PR-style summary).
+const CONTEXT_DONE_TOOL = {
+  name: "done",
+  description:
+    "Signal that you have finished analyzing the project. You MUST call this tool with the full generated markdown document.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description:
+          "A short one-line title (e.g., 'Agent context for acme-api')",
+      },
+      summary: {
+        type: "string",
+        description:
+          "The FULL agent context markdown document. This entire string will be written verbatim to agent-context.md. It must contain all sections: project overview, tech stack, repo structure, build commands, conventions, testing, and project-specific patterns.",
+      },
+    },
+    required: ["title", "summary"],
+  },
+};
+
+const CONTEXT_TOOLS = [
+  ...TOOLS.filter((t) =>
+    ["read_file", "list_directory", "search_files", "find_files", "get_file_info", "execute_command"].includes(t.name)
+  ),
+  CONTEXT_DONE_TOOL,
+];
 
 /**
  * Build the system prompt parts for the context-generation agent.
@@ -640,7 +666,7 @@ The output should be a well-structured markdown document covering:
 - Keep it concise — aim for a document that's useful as quick reference, not an exhaustive wiki.
 - Use markdown headers and bullet points for easy scanning.
 - Do NOT use git commands.
-- When you are done, call the "done" tool. Put a short title in the "title" field and put the full markdown document in the "summary" field.`];
+- When finished, you MUST call the "done" tool. The "summary" field must contain the COMPLETE markdown document — it will be written directly to agent-context.md. Do NOT put a short summary there; put the entire document.`];
 }
 
 /**
@@ -650,15 +676,23 @@ The output should be a well-structured markdown document covering:
  */
 export async function runContextAgent(project) {
   const systemPrompt = buildContextSystemPrompt(project);
-  const userText = `Analyze this project and generate the agent context document. Start by exploring the project structure, then read key files (README, package.json, config files, a few source files, test files, etc.) to understand the codebase.`;
+  const userText = `Analyze this project and generate the agent context document. Start by exploring the project structure, then read key files (README, package.json, config files, a few source files, test files, etc.) to understand the codebase. When you have enough information, call the "done" tool with the full markdown document in the "summary" field.`;
 
   const result = await agentLoop(project, systemPrompt, userText, CONTEXT_TOOLS, 30);
 
   if (!result.success) return result;
 
+  const content = result.summary;
+  if (!content || content === "Changes implemented") {
+    return {
+      success: false,
+      error: "Agent finished without producing an agent context document. Try running the command again.",
+    };
+  }
+
   return {
     success: true,
-    content: result.summary,
+    content,
     usage: result.usage,
   };
 }
