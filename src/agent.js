@@ -486,6 +486,8 @@ export async function runAgent(project, request) {
   messages.push(provider.formatUserMessage(userText));
 
   let turns = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
 
   while (turns < MAX_TURNS) {
     turns++;
@@ -502,22 +504,33 @@ export async function runAgent(project, request) {
     // Parse into normalized shape
     const parsed = provider.parseResponse(apiResponse);
 
+    // Track token usage
+    if (parsed.usage) {
+      totalInputTokens += parsed.usage.input_tokens;
+      totalOutputTokens += parsed.usage.output_tokens;
+      console.log(`    Tokens — in: ${parsed.usage.input_tokens}, out: ${parsed.usage.output_tokens}`);
+    }
+
     // Append the assistant's raw response to the conversation
     messages.push(provider.formatAssistantMessage(parsed.raw));
 
     // If the model finished without tool calls, we're done
     if (parsed.done) {
+      console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
       return {
         success: true,
         summary: parsed.text || "Changes implemented",
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
       };
     }
 
     // If there are no tool calls and no done signal, treat text as completion
     if (parsed.toolCalls.length === 0) {
+      console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
       return {
         success: true,
         summary: parsed.text || "Changes implemented",
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
       };
     }
 
@@ -536,7 +549,13 @@ export async function runAgent(project, request) {
 
       // Check if the agent signaled done
       if (result.done) {
-        return { success: true, title: result.title, summary: result.summary };
+        console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
+        return {
+          success: true,
+          title: result.title,
+          summary: result.summary,
+          usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+        };
       }
 
       toolResults.push({
@@ -551,8 +570,10 @@ export async function runAgent(project, request) {
     messages.push(provider.formatToolResults(toolResults));
   }
 
+  console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
   return {
     success: false,
     error: `Agent exceeded maximum turns (${MAX_TURNS})`,
+    usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
   };
 }

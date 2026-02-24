@@ -154,6 +154,10 @@ export function parseResponse(apiResponse) {
     toolCalls,
     done,
     raw: parts,
+    usage: {
+      input_tokens: apiResponse.usageMetadata?.promptTokenCount || 0,
+      output_tokens: apiResponse.usageMetadata?.candidatesTokenCount || 0,
+    },
   };
 }
 

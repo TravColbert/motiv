@@ -81,6 +81,12 @@ export function parseResponse(apiResponse) {
     toolCalls,
     done,
     raw: apiResponse.content,
+    usage: apiResponse.usage ? {
+      input_tokens: apiResponse.usage.input_tokens,
+      output_tokens: apiResponse.usage.output_tokens,
+      cache_creation_input_tokens: apiResponse.usage.cache_creation_input_tokens || 0,
+      cache_read_input_tokens: apiResponse.usage.cache_read_input_tokens || 0,
+    } : undefined,
   };
 }
 
