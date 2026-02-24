@@ -35,13 +35,15 @@ export function formatTools(tools) {
  *
  * Gemini uses `contents` instead of `messages`, `systemInstruction` instead of `system`,
  * and roles "user" / "model" instead of "user" / "assistant".
+ * systemParts is an array of strings; each becomes a separate part for prefix-based caching.
  */
-export function formatRequest(systemPrompt, messages, tools) {
+export function formatRequest(systemParts, messages, tools) {
+  const parts = Array.isArray(systemParts) ? systemParts : [systemParts];
   const contents = messages.map((msg) => convertMessage(msg));
 
   return {
     systemInstruction: {
-      parts: [{ text: systemPrompt }],
+      parts: parts.map((text) => ({ text })),
     },
     contents,
     tools: formatTools(tools),

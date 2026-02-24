@@ -17,6 +17,8 @@ const REQUESTS_DIR = join(LEDGER_DIR, "requests");
 const TEMPLATES_DIR = join(LEDGER_DIR, "templates");
 const PLUGINS_DIR = join(LEDGER_DIR, "plugins");
 
+export const AGENT_CONTEXT_FILENAME = "agent-context.md";
+
 export const paths = {
   home: APP_HOME,
   ledger: LEDGER_DIR,

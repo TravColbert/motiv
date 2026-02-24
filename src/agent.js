@@ -1,6 +1,6 @@
 import { readdir, stat, unlink } from "fs/promises";
 import { join } from "path";
-import { resolveCredential, readJsonFile, APP_NAME, APP_NAME_LOWER } from "./config.js";
+import { resolveCredential, readJsonFile, AGENT_CONTEXT_FILENAME, APP_NAME, APP_NAME_LOWER } from "./config.js";
 import { workspacePath, runInWorkspace, git } from "./git.js";
 import { getProvider } from "./providers/index.js";
 
@@ -417,10 +417,22 @@ async function executeTool(projectName, toolName, toolInput) {
 }
 
 /**
- * Build the system prompt for the agent.
+ * Read the per-project agent context file from the workspace.
+ * Returns the file contents, or an empty string if it doesn't exist.
  */
-function buildSystemPrompt(project) {
-  return `You are ${APP_NAME}, an autonomous development agent. You are implementing a code change in a Git repository.
+async function loadAgentContext(projectName) {
+  const contextPath = join(workspacePath(projectName), AGENT_CONTEXT_FILENAME);
+  const file = Bun.file(contextPath);
+  if (!(await file.exists())) return "";
+  return await file.text();
+}
+
+/**
+ * Build the system prompt parts for the agent.
+ * Returns an array of strings — each becomes a separately cacheable block.
+ */
+function buildSystemPrompt(project, agentContext) {
+  const base = `You are ${APP_NAME}, an autonomous development agent. You are implementing a code change in a Git repository.
 
 ## Project
 - Name: ${project.name}
@@ -441,21 +453,125 @@ function buildSystemPrompt(project) {
 - Follow existing code style and conventions.
 - If you encounter an issue you cannot resolve, call "done" with a summary explaining what went wrong.
 - Be thorough but efficient with your context -- read files you need, don't read everything.`;
+
+  const parts = [base];
+  if (agentContext.trim()) {
+    parts.push(agentContext.trim());
+  }
+  return parts;
+}
+
+/**
+ * Core agent loop shared by runAgent and runContextAgent.
+ * Sends messages, executes tools, repeats until done or max turns.
+ * Returns { success, title, summary, error, usage }.
+ */
+async function agentLoop(project, systemParts, userText, tools, maxTurns = MAX_TURNS) {
+  const provider = getProvider();
+  const apiKey = resolveCredential(provider.credentialName);
+
+  const messages = [];
+  messages.push(provider.formatUserMessage(userText));
+
+  let turns = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+
+  while (turns < maxTurns) {
+    turns++;
+    console.log(`  Agent turn ${turns}...`);
+
+    const formattedRequest = provider.formatRequest(
+      systemParts,
+      messages,
+      tools
+    );
+
+    let apiResponse;
+    try {
+      apiResponse = await provider.call(apiKey, formattedRequest);
+    } catch (err) {
+      console.error(`  LLM API error on turn ${turns}: ${err.message}`);
+      return {
+        success: false,
+        error: err.message,
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+      };
+    }
+
+    const parsed = provider.parseResponse(apiResponse);
+
+    if (parsed.usage) {
+      totalInputTokens += parsed.usage.input_tokens;
+      totalOutputTokens += parsed.usage.output_tokens;
+      console.log(`    Tokens — in: ${parsed.usage.input_tokens}, out: ${parsed.usage.output_tokens}`);
+    }
+
+    if (parsed.text) {
+      for (const line of parsed.text.split('\n')) {
+        console.log(`    ${line}`);
+      }
+    }
+
+    messages.push(provider.formatAssistantMessage(parsed.raw));
+
+    if (parsed.done || parsed.toolCalls.length === 0) {
+      console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
+      return {
+        success: true,
+        summary: parsed.text || "Changes implemented",
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+      };
+    }
+
+    const toolResults = [];
+
+    for (const toolCall of parsed.toolCalls) {
+      const params = formatToolParams(toolCall.name, toolCall.input);
+      console.log(`    Tool: ${toolCall.name}${params ? ` — ${params}` : ""}`);
+
+      const result = await executeTool(
+        project.name,
+        toolCall.name,
+        toolCall.input
+      );
+
+      if (result.done) {
+        console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
+        return {
+          success: true,
+          title: result.title,
+          summary: result.summary,
+          usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+        };
+      }
+
+      toolResults.push({
+        id: toolCall.id,
+        name: toolCall.name,
+        content: JSON.stringify(result),
+      });
+    }
+
+    messages.push(provider.formatToolResults(toolResults));
+  }
+
+  console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
+  return {
+    success: false,
+    error: `Agent exceeded maximum turns (${maxTurns})`,
+    usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+  };
 }
 
 /**
  * Run the agent loop: send messages, execute tools, repeat until done.
- * Returns { success, summary, error }.
+ * Returns { success, title, summary, error, usage }.
  */
 export async function runAgent(project, request) {
-  const provider = getProvider();
-  const apiKey = resolveCredential(provider.credentialName);
-  const systemPrompt = buildSystemPrompt(project);
+  const agentContext = await loadAgentContext(project.name);
+  const systemPrompt = buildSystemPrompt(project, agentContext);
 
-  // Messages in the provider's native format
-  const messages = [];
-
-  // Initial user message — include prior work context for amends
   const currentSpec = request.spec[request.spec.length - 1];
   let userText;
 
@@ -483,114 +599,100 @@ export async function runAgent(project, request) {
     userText = `Please implement the following change:\n\n${currentSpec.description}\n\nStart by exploring the project structure to understand the codebase.`;
   }
 
-  messages.push(provider.formatUserMessage(userText));
+  return agentLoop(project, systemPrompt, userText, TOOLS);
+}
 
-  let turns = 0;
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
+// Tools for the context agent: read-only exploration + a done tool that
+// expects the full markdown document (not a short PR-style summary).
+const CONTEXT_DONE_TOOL = {
+  name: "done",
+  description:
+    "Signal that you have finished analyzing the project. You MUST call this tool with the full generated markdown document.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description:
+          "A short one-line title (e.g., 'Agent context for acme-api')",
+      },
+      summary: {
+        type: "string",
+        description:
+          "The FULL agent context markdown document. This entire string will be written verbatim to agent-context.md. It must contain all sections: project overview, tech stack, repo structure, build commands, conventions, testing, and project-specific patterns.",
+      },
+    },
+    required: ["title", "summary"],
+  },
+};
 
-  while (turns < MAX_TURNS) {
-    turns++;
-    console.log(`  Agent turn ${turns}...`);
+const CONTEXT_TOOLS = [
+  ...TOOLS.filter((t) =>
+    ["read_file", "list_directory", "search_files", "find_files", "get_file_info", "execute_command"].includes(t.name)
+  ),
+  CONTEXT_DONE_TOOL,
+];
 
-    // Build and send the request
-    const formattedRequest = provider.formatRequest(
-      systemPrompt,
-      messages,
-      TOOLS
-    );
+/**
+ * Build the system prompt parts for the context-generation agent.
+ */
+function buildContextSystemPrompt(project) {
+  return [`You are ${APP_NAME}, an autonomous development agent. You are analyzing a project to generate an agent context file that will guide future development work.
 
-    let apiResponse;
-    try {
-      apiResponse = await provider.call(apiKey, formattedRequest);
-    } catch (err) {
-      console.error(`  LLM API error on turn ${turns}: ${err.message}`);
-      return {
-        success: false,
-        error: err.message,
-        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
-      };
-    }
+## Project
+- Name: ${project.name}
+- Repository: ${project.repo}
+- Default branch: ${project.default_branch || "main"}
 
-    // Parse into normalized shape
-    const parsed = provider.parseResponse(apiResponse);
+## Your Task
 
-    // Track token usage
-    if (parsed.usage) {
-      totalInputTokens += parsed.usage.input_tokens;
-      totalOutputTokens += parsed.usage.output_tokens;
-      console.log(`    Tokens — in: ${parsed.usage.input_tokens}, out: ${parsed.usage.output_tokens}`);
-    }
+Explore this project and produce a comprehensive markdown document (the "agent context") that will be included in the system prompt for all future ${APP_NAME} requests against this project. The goal is to give a future coding agent everything it needs to work effectively in this codebase without re-discovering it each time.
 
-    if (parsed.text) {
-      for (const line of parsed.text.split('\n')) {
-        console.log(`    ${line}`);
-      }
-    }
+## What to Include
 
-    // Append the assistant's raw response to the conversation
-    messages.push(provider.formatAssistantMessage(parsed.raw));
+The output should be a well-structured markdown document covering:
 
-    // If the model finished without tool calls, we're done
-    if (parsed.done) {
-      console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
-      return {
-        success: true,
-        summary: parsed.text || "Changes implemented",
-        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
-      };
-    }
+1. **Project overview** — what the project does, in one or two sentences.
+2. **Tech stack** — language(s), framework(s), runtime, key dependencies.
+3. **Repository structure** — brief map of important directories and what they contain.
+4. **Build & run commands** — how to install dependencies, build, run, and test.
+5. **Code conventions** — module system (ESM/CJS), naming patterns, file organization, import style.
+6. **Testing** — test framework, how to run tests, where tests live, any test conventions.
+7. **Any project-specific patterns** — e.g., architecture patterns (MVC, plugin system), config files the agent should know about, CI/CD details visible in the repo.
 
-    // If there are no tool calls and no done signal, treat text as completion
-    if (parsed.toolCalls.length === 0) {
-      console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
-      return {
-        success: true,
-        summary: parsed.text || "Changes implemented",
-        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
-      };
-    }
+## Rules
 
-    // Execute each tool call
-    const toolResults = [];
+- Do NOT include generic advice that applies to all projects. Be specific to THIS codebase.
+- Keep it concise — aim for a document that's useful as quick reference, not an exhaustive wiki.
+- Use markdown headers and bullet points for easy scanning.
+- Do NOT use git commands.
+- When finished, you MUST call the "done" tool. The "summary" field must contain the COMPLETE markdown document — it will be written directly to agent-context.md. Do NOT put a short summary there; put the entire document.`];
+}
 
-    for (const toolCall of parsed.toolCalls) {
-      const params = formatToolParams(toolCall.name, toolCall.input);
-      console.log(`    Tool: ${toolCall.name}${params ? ` — ${params}` : ""}`);
+/**
+ * Run the context-generation agent. Explores the project and returns
+ * a tailored agent-context.md document.
+ * Returns { success, content, error }.
+ */
+export async function runContextAgent(project) {
+  const systemPrompt = buildContextSystemPrompt(project);
+  const userText = `Analyze this project and generate the agent context document. Start by exploring the project structure, then read key files (README, package.json, config files, a few source files, test files, etc.) to understand the codebase. When you have enough information, call the "done" tool with the full markdown document in the "summary" field.`;
 
-      const result = await executeTool(
-        project.name,
-        toolCall.name,
-        toolCall.input
-      );
+  const result = await agentLoop(project, systemPrompt, userText, CONTEXT_TOOLS, 30);
 
-      // Check if the agent signaled done
-      if (result.done) {
-        console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
-        return {
-          success: true,
-          title: result.title,
-          summary: result.summary,
-          usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
-        };
-      }
+  if (!result.success) return result;
 
-      toolResults.push({
-        id: toolCall.id,
-        name: toolCall.name,
-        content: JSON.stringify(result),
-      });
-    }
-
-    // Send tool results back
-    // Tool results get appended to the messages, which collect over iterations
-    messages.push(provider.formatToolResults(toolResults));
+  const content = result.summary;
+  if (!content || content === "Changes implemented") {
+    return {
+      success: false,
+      error: "Agent finished without producing an agent context document. Try running the command again.",
+    };
   }
 
-  console.log(`  Total tokens — in: ${totalInputTokens}, out: ${totalOutputTokens}`);
   return {
-    success: false,
-    error: `Agent exceeded maximum turns (${MAX_TURNS})`,
-    usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+    success: true,
+    content,
+    usage: result.usage,
   };
 }
