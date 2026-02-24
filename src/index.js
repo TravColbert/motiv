@@ -23,9 +23,9 @@ import {
   runInWorkspace,
 } from "./git.js";
 import { createRequest, amendRequest, recordAttempt, markApplied, canRetry, canAmend } from "./request.js";
-import { runAgent } from "./agent.js";
+import { runAgent, runContextAgent } from "./agent.js";
 import { createPR, enableAutoMerge } from "./github.js";
-import { readJsonFile } from "./config.js";
+import { readJsonFile, AGENT_CONTEXT_FILENAME } from "./config.js";
 import { resolveDescription } from "./description.js";
 import { join } from "path";
 import { workspacePath } from "./git.js";
@@ -56,6 +56,7 @@ Commands:
   list                              List all requests
   show <id>                         Show request details
   logs <id>                         Show request execution logs
+  context --project <p>              Generate agent-context.md for a project
   retry <id> [--autonomy <level>]   Re-attempt a failed request
          [--force]                 Rebuild from scratch, even if succeeded/applied
 
@@ -116,6 +117,7 @@ async function cmdInit() {
   console.log("Next steps:");
   console.log(`  1. Add your API keys to ~/.${APP_NAME_LOWER}/.env`);
   console.log(`  2. Register a project: ${APP_NAME_LOWER} project add --name <name> --repo <url>`);
+  console.log(`  3. Customize per-project agent behavior in ~/.${APP_NAME_LOWER}/workspaces/<project>/agent-context.md`);
 }
 
 async function cmdProjectAdd(subArgs) {
@@ -173,6 +175,42 @@ async function cmdProjectList() {
     console.log(`    autonomy: ${p.autonomy || DEFAULT_AUTONOMY}`);
     console.log("");
   }
+}
+
+async function cmdContext(subArgs) {
+  const { flags } = parseFlags(subArgs);
+  const projectName = flags.project;
+
+  if (!projectName) {
+    console.error(`Usage: ${APP_NAME_LOWER} context --project <name>`);
+    process.exit(1);
+  }
+
+  const project = await readProject(projectName);
+  if (!project) {
+    console.error(`Project "${projectName}" not found. Register it first with: ${APP_NAME_LOWER} project add`);
+    process.exit(1);
+  }
+
+  await loadEnv();
+
+  console.log(`Preparing workspace for "${projectName}"...`);
+  await ensureWorkspace(project);
+
+  console.log(`Analyzing project to generate agent context...`);
+  const result = await runContextAgent(project);
+
+  if (!result.success) {
+    console.error(`\nContext generation failed: ${result.error}`);
+    process.exit(1);
+  }
+
+  const contextPath = join(workspacePath(projectName), AGENT_CONTEXT_FILENAME);
+  await Bun.write(contextPath, result.content);
+
+  console.log(`\nAgent context written to: ${contextPath}`);
+  console.log(`This file will be included in the system prompt for all future requests against "${projectName}".`);
+  console.log(`Edit it any time to refine agent behavior.`);
 }
 
 async function cmdSubmit(subArgs) {
@@ -654,6 +692,10 @@ async function main() {
       }
       break;
     }
+
+    case "context":
+      await cmdContext(subArgs);
+      break;
 
     case "submit":
       await cmdSubmit(subArgs);

@@ -24,12 +24,18 @@ export function formatTools(tools) {
 
 /**
  * Format a request for the Claude Messages API.
+ * systemParts is an array of strings; each becomes a separately cached text block.
  */
-export function formatRequest(systemPrompt, messages, tools) {
+export function formatRequest(systemParts, messages, tools) {
+  const parts = Array.isArray(systemParts) ? systemParts : [systemParts];
   return {
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+    system: parts.map((text) => ({
+      type: "text",
+      text,
+      cache_control: { type: "ephemeral" },
+    })),
     tools: formatTools(tools),
     messages,
   };

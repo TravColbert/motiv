@@ -1,5 +1,5 @@
 import { join } from "path";
-import { paths, APP_NAME, APP_NAME_LOWER } from "./config.js";
+import { paths, APP_NAME, APP_NAME_LOWER, AGENT_CONTEXT_FILENAME } from "./config.js";
 
 /**
  * Common exclude patterns for workspace repos.
@@ -73,6 +73,22 @@ coverage/
 tmp/
 temp/
 *.log
+
+# ${APP_NAME} agent context (per-project, not committed)
+${AGENT_CONTEXT_FILENAME}
+`;
+
+const DEFAULT_AGENT_CONTEXT = `# ${APP_NAME} Agent Context
+
+<!-- Customize this file to give the ${APP_NAME} agent persistent context for this project. -->
+<!-- Everything here is included in the agent's system prompt for every request. -->
+
+## General Guidelines
+
+- Write clean, readable code that follows the existing style of the project.
+- Prefer minimal, focused changes. Do not refactor unrelated code.
+- If the project has tests, run them before finishing to verify your changes work.
+- If you are unsure about a convention, look at existing code for patterns before inventing your own.
 `;
 
 /**
@@ -120,6 +136,7 @@ export async function cloneRepo(repoUrl, projectName) {
   await git(dest, ["config", "user.name", APP_NAME]);
   await git(dest, ["config", "user.email", `${APP_NAME_LOWER}@local`]);
   await writeWorkspaceExcludes(dest);
+  await writeAgentContext(dest);
   return dest;
 }
 
@@ -130,6 +147,16 @@ export async function cloneRepo(repoUrl, projectName) {
 async function writeWorkspaceExcludes(repoPath) {
   const excludePath = join(repoPath, ".git", "info", "exclude");
   await Bun.write(excludePath, WORKSPACE_EXCLUDES);
+}
+
+/**
+ * Write the default agent context file into a workspace if it doesn't already exist.
+ */
+async function writeAgentContext(repoPath) {
+  const contextPath = join(repoPath, AGENT_CONTEXT_FILENAME);
+  const file = Bun.file(contextPath);
+  if (await file.exists()) return;
+  await Bun.write(contextPath, DEFAULT_AGENT_CONTEXT);
 }
 
 /**

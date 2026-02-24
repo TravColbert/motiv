@@ -49,9 +49,9 @@ describe("claude provider", () => {
     expect(claude.formatTools([])).toEqual([]);
   });
 
-  test("formatRequest produces correct shape", () => {
+  test("formatRequest produces correct shape with single system part", () => {
     const messages = [{ role: "user", content: "hello" }];
-    const result = claude.formatRequest("system prompt", messages, SAMPLE_TOOLS);
+    const result = claude.formatRequest(["system prompt"], messages, SAMPLE_TOOLS);
 
     expect(result.model).toBe("claude-opus-4-6");
     expect(result.system).toEqual([
@@ -60,6 +60,20 @@ describe("claude provider", () => {
     expect(result.messages).toEqual(messages);
     expect(result.tools[1]).toMatchObject({ cache_control: { type: "ephemeral" } });
     expect(result.max_tokens).toBe(16384);
+  });
+
+  test("formatRequest caches each system part separately", () => {
+    const messages = [{ role: "user", content: "hello" }];
+    const result = claude.formatRequest(
+      ["base instructions", "agent context"],
+      messages,
+      SAMPLE_TOOLS
+    );
+
+    expect(result.system).toEqual([
+      { type: "text", text: "base instructions", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "agent context", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   test("formatUserMessage produces correct shape", () => {
@@ -173,9 +187,9 @@ describe("gemini provider", () => {
     ]);
   });
 
-  test("formatRequest produces correct shape", () => {
+  test("formatRequest produces correct shape with single system part", () => {
     const messages = [{ role: "user", content: "hello" }];
-    const result = gemini.formatRequest("system prompt", messages, SAMPLE_TOOLS);
+    const result = gemini.formatRequest(["system prompt"], messages, SAMPLE_TOOLS);
 
     expect(result.systemInstruction).toEqual({
       parts: [{ text: "system prompt" }],
@@ -188,12 +202,28 @@ describe("gemini provider", () => {
     expect(result.generationConfig.maxOutputTokens).toBe(16384);
   });
 
+  test("formatRequest maps multiple system parts to separate instruction parts", () => {
+    const messages = [{ role: "user", content: "hello" }];
+    const result = gemini.formatRequest(
+      ["base instructions", "agent context"],
+      messages,
+      SAMPLE_TOOLS
+    );
+
+    expect(result.systemInstruction).toEqual({
+      parts: [
+        { text: "base instructions" },
+        { text: "agent context" },
+      ],
+    });
+  });
+
   test("formatRequest converts assistant role to model", () => {
     const messages = [
       { role: "user", content: "hello" },
       { role: "assistant", content: [{ type: "text", text: "hi" }] },
     ];
-    const result = gemini.formatRequest("sys", messages, SAMPLE_TOOLS);
+    const result = gemini.formatRequest(["sys"], messages, SAMPLE_TOOLS);
     expect(result.contents[1].role).toBe("model");
   });
 
