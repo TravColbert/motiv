@@ -499,7 +499,18 @@ export async function runAgent(project, request) {
       messages,
       TOOLS
     );
-    const apiResponse = await provider.call(apiKey, formattedRequest);
+
+    let apiResponse;
+    try {
+      apiResponse = await provider.call(apiKey, formattedRequest);
+    } catch (err) {
+      console.error(`  LLM API error on turn ${turns}: ${err.message}`);
+      return {
+        success: false,
+        error: err.message,
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens },
+      };
+    }
 
     // Parse into normalized shape
     const parsed = provider.parseResponse(apiResponse);
