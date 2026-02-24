@@ -22,8 +22,36 @@ function getRetryDelay(response, attempt) {
   return Math.min(exponential * jitter, MAX_DELAY_MS);
 }
 
-function sleep(ms) {
+export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Parse a duration string like "1m30s", "45s", "2m" into milliseconds.
+ */
+function parseDuration(str) {
+  if (!str) return null;
+  let ms = 0;
+  const minutes = str.match(/(\d+(?:\.\d+)?)m(?!s)/);
+  const seconds = str.match(/(\d+(?:\.\d+)?)s/);
+  const millis = str.match(/(\d+(?:\.\d+)?)ms/);
+  if (minutes) ms += parseFloat(minutes[1]) * 60000;
+  if (seconds) ms += parseFloat(seconds[1]) * 1000;
+  if (millis) ms += parseFloat(millis[1]);
+  return ms || null;
+}
+
+/**
+ * Extract rate limit info from response headers.
+ */
+function extractRateLimit(response) {
+  const get = (name) => response.headers.get(name);
+  return {
+    remainingTokens: get("x-ratelimit-remaining-tokens") ? Number(get("x-ratelimit-remaining-tokens")) : null,
+    remainingRequests: get("x-ratelimit-remaining-requests") ? Number(get("x-ratelimit-remaining-requests")) : null,
+    resetTokens: parseDuration(get("x-ratelimit-reset-tokens")),
+    resetRequests: parseDuration(get("x-ratelimit-reset-requests")),
+  };
 }
 
 /**
@@ -37,7 +65,7 @@ export async function fetchWithRetry(url, options, { maxRetries = MAX_RETRIES } 
     const response = await fetch(url, options);
 
     if (response.ok || !isRetryable(response.status)) {
-      return response;
+      return { response, rateLimit: extractRateLimit(response) };
     }
 
     lastResponse = response;
@@ -51,5 +79,5 @@ export async function fetchWithRetry(url, options, { maxRetries = MAX_RETRIES } 
     }
   }
 
-  return lastResponse;
+  return { response: lastResponse, rateLimit: extractRateLimit(lastResponse) };
 }

@@ -1,7 +1,7 @@
-import { fetchWithRetry } from "./retry.js";
+import { fetchWithRetry, sleep } from "./retry.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-opus-4-6";
 const MAX_TOKENS = 16384;
 
 /**
@@ -93,8 +93,10 @@ export function parseResponse(apiResponse) {
 /**
  * Make the API call to Claude.
  */
+const RATE_LIMIT_TOKEN_FLOOR = 1000;
+
 export async function call(apiKey, formattedRequest) {
-  const response = await fetchWithRetry(API_URL, {
+  const { response, rateLimit } = await fetchWithRetry(API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -107,6 +109,12 @@ export async function call(apiKey, formattedRequest) {
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Claude API error (${response.status}): ${error}`);
+  }
+
+  if (rateLimit.remainingTokens !== null && rateLimit.remainingTokens < RATE_LIMIT_TOKEN_FLOOR && rateLimit.resetTokens) {
+    const delaySec = (rateLimit.resetTokens / 1000).toFixed(1);
+    console.error(`  Rate limit low (${rateLimit.remainingTokens} tokens remaining), throttling for ${delaySec}s...`);
+    await sleep(rateLimit.resetTokens);
   }
 
   return response.json();
