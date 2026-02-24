@@ -24,7 +24,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(200, '{"ok":true}');
     };
 
-    const response = await fetchWithRetry("http://test.com", {});
+    const { response } = await fetchWithRetry("http://test.com", {});
     expect(response.status).toBe(200);
     expect(callCount).toBe(1);
   });
@@ -36,7 +36,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(400, "Bad request");
     };
 
-    const response = await fetchWithRetry("http://test.com", {});
+    const { response } = await fetchWithRetry("http://test.com", {});
     expect(response.status).toBe(400);
     expect(callCount).toBe(1);
   });
@@ -48,7 +48,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(401, "Unauthorized");
     };
 
-    const response = await fetchWithRetry("http://test.com", {});
+    const { response } = await fetchWithRetry("http://test.com", {});
     expect(response.status).toBe(401);
     expect(callCount).toBe(1);
   });
@@ -62,7 +62,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(200, '{"ok":true}');
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 3 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 3 });
     expect(response.status).toBe(200);
     expect(callCount).toBe(2);
   });
@@ -76,7 +76,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(200, '{"ok":true}');
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 3 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 3 });
     expect(response.status).toBe(200);
     expect(callCount).toBe(3);
   });
@@ -90,7 +90,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(200, '{"ok":true}');
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
     expect(response.status).toBe(200);
     expect(callCount).toBe(2);
   });
@@ -103,7 +103,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(429, "Rate limited");
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
     expect(response.status).toBe(429);
     expect(callCount).toBe(3); // initial + 2 retries
   });
@@ -119,7 +119,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(200, '{"ok":true}');
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 2 });
     expect(response.status).toBe(200);
     expect(timestamps.length).toBe(2);
     const elapsed = timestamps[1] - timestamps[0];
@@ -184,7 +184,7 @@ describe("fetchWithRetry", () => {
       return mockResponse(429, "Rate limited");
     };
 
-    const response = await fetchWithRetry("http://test.com", {}, { maxRetries: 0 });
+    const { response } = await fetchWithRetry("http://test.com", {}, { maxRetries: 0 });
     expect(response.status).toBe(429);
     expect(callCount).toBe(1);
   });

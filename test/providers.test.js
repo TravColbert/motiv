@@ -45,7 +45,7 @@ describe("claude provider", () => {
     const messages = [{ role: "user", content: "hello" }];
     const result = claude.formatRequest("system prompt", messages, SAMPLE_TOOLS);
 
-    expect(result.model).toBe("claude-sonnet-4-20250514");
+    expect(result.model).toBe("claude-opus-4-6");
     expect(result.system).toBe("system prompt");
     expect(result.messages).toEqual(messages);
     expect(result.tools).toEqual(SAMPLE_TOOLS);

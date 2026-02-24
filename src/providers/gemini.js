@@ -1,4 +1,4 @@
-import { fetchWithRetry } from "./retry.js";
+import { fetchWithRetry, sleep } from "./retry.js";
 
 const API_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = "gemini-2.5-pro";
@@ -164,10 +164,12 @@ export function parseResponse(apiResponse) {
 /**
  * Make the API call to Gemini.
  */
+const RATE_LIMIT_TOKEN_FLOOR = 1000;
+
 export async function call(apiKey, formattedRequest) {
   const url = `${API_URL}/${MODEL}:generateContent?key=${apiKey}`;
 
-  const response = await fetchWithRetry(url, {
+  const { response, rateLimit } = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -178,6 +180,12 @@ export async function call(apiKey, formattedRequest) {
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Gemini API error (${response.status}): ${error}`);
+  }
+
+  if (rateLimit.remainingTokens !== null && rateLimit.remainingTokens < RATE_LIMIT_TOKEN_FLOOR && rateLimit.resetTokens) {
+    const delaySec = (rateLimit.resetTokens / 1000).toFixed(1);
+    console.error(`  Rate limit low (${rateLimit.remainingTokens} tokens remaining), throttling for ${delaySec}s...`);
+    await sleep(rateLimit.resetTokens);
   }
 
   return response.json();
