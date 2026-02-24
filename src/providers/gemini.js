@@ -128,7 +128,8 @@ export function formatUserMessage(text) {
 export function parseResponse(apiResponse) {
   const candidate = apiResponse.candidates?.[0];
   if (!candidate) {
-    throw new Error("Gemini returned no candidates");
+    const detail = JSON.stringify(apiResponse).slice(0, 500);
+    throw new Error(`Gemini returned no candidates. Response: ${detail}`);
   }
 
   const parts = candidate.content?.parts || [];

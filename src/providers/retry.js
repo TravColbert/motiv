@@ -75,6 +75,15 @@ export async function fetchWithRetry(url, options, { maxRetries = MAX_RETRIES } 
       const delaySec = (delayMs / 1000).toFixed(1);
       const reason = response.status === 429 ? "Rate limited" : `Server error (${response.status})`;
       console.error(`  ${reason}, retrying in ${delaySec}s (attempt ${attempt + 1}/${maxRetries})...`);
+      try {
+        const body = await response.text();
+        if (body) {
+          const truncated = body.length > 500 ? body.slice(0, 500) + "..." : body;
+          console.error(`    Response: ${truncated}`);
+        }
+      } catch {
+        // Ignore if body can't be read
+      }
       await sleep(delayMs);
     }
   }
