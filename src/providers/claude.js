@@ -14,7 +14,12 @@ export const credentialName = "ANTHROPIC_API_KEY";
  * Claude uses `input_schema` which matches our internal format directly.
  */
 export function formatTools(tools) {
-  return tools;
+  if (tools.length === 0) return tools;
+  return tools.map((tool, i) =>
+    i === tools.length - 1
+      ? { ...tool, cache_control: { type: "ephemeral" } }
+      : tool
+  );
 }
 
 /**
@@ -24,7 +29,7 @@ export function formatRequest(systemPrompt, messages, tools) {
   return {
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    system: systemPrompt,
+    system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
     tools: formatTools(tools),
     messages,
   };

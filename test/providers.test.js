@@ -36,9 +36,17 @@ describe("claude provider", () => {
     expect(claude.credentialName).toBe("ANTHROPIC_API_KEY");
   });
 
-  test("formatTools passes through directly", () => {
+  test("formatTools adds cache_control to last tool only", () => {
     const result = claude.formatTools(SAMPLE_TOOLS);
-    expect(result).toEqual(SAMPLE_TOOLS);
+    expect(result[0]).toEqual(SAMPLE_TOOLS[0]);
+    expect(result[1]).toEqual({
+      ...SAMPLE_TOOLS[1],
+      cache_control: { type: "ephemeral" },
+    });
+  });
+
+  test("formatTools returns empty array unchanged", () => {
+    expect(claude.formatTools([])).toEqual([]);
   });
 
   test("formatRequest produces correct shape", () => {
@@ -46,9 +54,11 @@ describe("claude provider", () => {
     const result = claude.formatRequest("system prompt", messages, SAMPLE_TOOLS);
 
     expect(result.model).toBe("claude-opus-4-6");
-    expect(result.system).toBe("system prompt");
+    expect(result.system).toEqual([
+      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    ]);
     expect(result.messages).toEqual(messages);
-    expect(result.tools).toEqual(SAMPLE_TOOLS);
+    expect(result.tools[1]).toMatchObject({ cache_control: { type: "ephemeral" } });
     expect(result.max_tokens).toBe(16384);
   });
 
